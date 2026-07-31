@@ -1,0 +1,21 @@
+# Extracted keys and certificates never belong in the repository.
+results/*
+!results/.gitkeep
+
+# Stray containers people drop into the working tree while testing.
+*.pfx
+*.p12
+*.key
+*.cer
+*.pem
+
+.DS_Store
+
+# Local task notes, not part of the published project.
+TASK.md
+
+# Local editor/agent settings.
+.claude/settings.local.json
+
+# CI fixtures.
+fixture/

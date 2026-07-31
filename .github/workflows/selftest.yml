@@ -1,0 +1,90 @@
+name: selftest
+
+# The image is built from moving upstreams: gost-engine master and whatever
+# OpenSSL currently sits in Debian trixie. A daily run turns that into a canary
+# — if an upstream change breaks the build or the engine, the badge goes red
+# before a user hits it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # 05:23 UTC daily. Off the hour on purpose: scheduled jobs queue up at the
+    # top of every hour and get delayed.
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+# The job only reads the repository. Nothing is published from here.
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: build image and split a GOST container
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: make build
+
+      - name: Report the toolchain
+        run: |
+          docker run --rm --network none --entrypoint /bin/sh gost-pfx-divider:latest -c '
+            openssl version
+            openssl engine gost -c | head -n 1
+          '
+
+      # Runs inside the container: generates a GOST key and certificate, packs
+      # them into a PFX and splits it again.
+      - name: Selftest
+        run: make selftest
+
+      # Exercises what the selftest cannot: the outer Makefile, the mounts, the
+      # password on stdin and file ownership — i.e. what a user actually runs.
+      - name: End-to-end split through the user-facing interface
+        env:
+          PFX_PASSWORD: ci-throwaway-password
+        run: |
+          mkdir -p fixture
+          # A container wrapped the way CryptoPro CSP wraps them: GOST inside,
+          # pbeWithSHA1And40BitRC2-CBC outside. Plain OpenSSL cannot open this.
+          docker run --rm --network none --entrypoint /bin/sh \
+            -e PFX_PASSWORD \
+            -u "$(id -u):$(id -g)" \
+            -v "$PWD/fixture:/out" \
+            gost-pfx-divider:latest -c '
+              set -eu
+              cd /tmp
+              openssl genpkey -algorithm gost2012_256 -pkeyopt paramset:A -out key.pem
+              openssl req -new -x509 -key key.pem -out cert.pem -days 1 -subj "/CN=ci"
+              openssl pkcs12 -export -inkey key.pem -in cert.pem -out /out/ci.pfx \
+                -passout env:PFX_PASSWORD \
+                -certpbe pbeWithSHA1And40BitRC2-CBC \
+                -keypbe pbeWithSHA1And40BitRC2-CBC \
+                -macalg sha1
+            '
+
+          make split PFX=fixture/ci.pfx
+
+          test -s results/ci/private.key
+          test -s results/ci/public.cer
+          test "$(stat -c '%a' results/ci/private.key)" = '600'
+          grep -q 'BEGIN PRIVATE KEY' results/ci/private.key
+          grep -q 'BEGIN CERTIFICATE' results/ci/public.cer
+
+      - name: Reject a wrong password
+        env:
+          PFX_PASSWORD: definitely-not-the-password
+        run: |
+          if make split PFX=fixture/ci.pfx; then
+            echo 'a wrong password was accepted' >&2
+            exit 1
+          fi

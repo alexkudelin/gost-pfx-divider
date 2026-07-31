@@ -1,0 +1,42 @@
+# OpenSSL configuration used inside the gost-pfx-divider container.
+#
+# Two things have to be switched on at once, and this is exactly what usually
+# goes wrong on a host machine:
+#
+#   1. The GOST engine, which provides GOST R 34.10-2012 / 34.11-2012 and the
+#      PBES2 key derivation CryptoPro CSP uses when it exports a PFX.
+#   2. The legacy provider, because CryptoPro CSP still wraps the certificate
+#      bag with pbeWithSHA1And40BitRC2-CBC, an algorithm that OpenSSL 3.x moved
+#      out of the default provider.
+#
+# Missing either of them produces the same unhelpful message about an
+# unsupported algorithm.
+
+openssl_conf = openssl_init
+
+[openssl_init]
+engines = engine_section
+providers = provider_section
+
+# --- engines --------------------------------------------------------------
+
+[engine_section]
+gost = gost_section
+
+[gost_section]
+engine_id = gost
+dynamic_path = @ENGINESDIR@/gost.so
+default_algorithms = ALL
+CRYPT_PARAMS = id-Gost28147-89-CryptoPro-A-ParamSet
+
+# --- providers ------------------------------------------------------------
+
+[provider_section]
+default = default_section
+legacy = legacy_section
+
+[default_section]
+activate = 1
+
+[legacy_section]
+activate = 1
